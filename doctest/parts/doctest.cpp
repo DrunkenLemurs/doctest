@@ -1916,7 +1916,7 @@ namespace detail {
 
         DOCTEST_ITERATE_THROUGH_REPORTERS(log_message, *this);
 
-        const bool isWarn = m_severity & assertType::is_warn;
+        const bool isWarn = !m_severity || m_severity & assertType::is_warn;
 
         // warn is just a message in this context so we don't treat it as an assert
         if(!isWarn) {
@@ -2853,9 +2853,11 @@ namespace {
     struct ConsoleReporter : public IReporter
     {
         std::ostream&                 s;
-        bool                          hasLoggedCurrentTestStart;
+        size_t                        hasLoggedCurrentTestStart;
+        size_t                        hasLoggedCurrentTestSubcase;
         std::vector<SubcaseSignature> subcasesStack;
         size_t                        currentSubcaseLevel;
+        size_t                        variation;
         DOCTEST_DECLARE_MUTEX(mutex)
 
         // caching pointers/references to objects of these types - safe to do
@@ -2877,6 +2879,12 @@ namespace {
         void separator_to_stream() {
             s << Color::Yellow
               << "==============================================================================="
+                 "\n";
+        }
+
+        void subcase_separator_to_stream() {
+            s << Color::Yellow
+              << "-------------------------------------------------------------------------------"
                  "\n";
         }
 
@@ -2922,9 +2930,47 @@ namespace {
             << (opt.gnu_file_line ? ":" : "):") << tail;
         }
 
-        void logTestStart() {
-            if(hasLoggedCurrentTestStart)
+        void logSubcasesStack() {
+            const size_t n = subcasesStack.size();
+            if (n > 0) {
+                s << Color::Yellow << "END OF SUBCASE SEQUENCE: " << Color::None << subcasesStack[0].m_name;
+                for(size_t i = 1; i < n; ++i) {
+                    if(subcasesStack[i].m_name[0] != '\0')
+                        s << "->" << subcasesStack[i].m_name;
+                }
+                s << "\n\n";
+            }
+        }
+
+        void logTestSubcaseStart() {
+            if (hasLoggedCurrentTestSubcase == currentSubcaseLevel + 1)
                 return;
+
+            const size_t n = currentSubcaseLevel;
+            if (n == 0) {
+                if (hasLoggedCurrentTestSubcase > 1)
+                    s << Color::Yellow << "TEST SUBCASE: " << Color::None << "(root)\n";
+            } else {
+                s << Color::Yellow << "TEST SUBCASE: " << Color::None << subcasesStack[0].m_name;
+                for(size_t i = 1; i < n; ++i) {
+                    if(subcasesStack[i].m_name[0] != '\0')
+                        s << "->" << subcasesStack[i].m_name;
+                }
+                s << "\n";
+            }
+
+            hasLoggedCurrentTestSubcase = currentSubcaseLevel + 1;
+        }
+
+        void logTestStart() {
+            if(hasLoggedCurrentTestStart) {
+                if (hasLoggedCurrentTestStart < variation) {
+                    subcase_separator_to_stream();
+                    s << "\n";
+                    hasLoggedCurrentTestStart = variation;
+                }
+                return;
+            }
 
             separator_to_stream();
             file_line_to_stream(tc->m_file.c_str(), tc->m_line, "\n");
@@ -2936,22 +2982,17 @@ namespace {
                 s << Color::Yellow << "TEST CASE:  ";
             s << Color::None << tc->m_name << "\n";
 
-            for(size_t i = 0; i < currentSubcaseLevel; ++i) {
-                if(subcasesStack[i].m_name[0] != '\0')
-                    s << "  " << subcasesStack[i].m_name << "\n";
-            }
-
-            if(currentSubcaseLevel != subcasesStack.size()) {
-                s << Color::Yellow << "\nDEEPEST SUBCASE STACK REACHED (DIFFERENT FROM THE CURRENT ONE):\n" << Color::None;
-                for(size_t i = 0; i < subcasesStack.size(); ++i) {
-                    if(subcasesStack[i].m_name[0] != '\0')
-                        s << "  " << subcasesStack[i].m_name << "\n";
-                }
-            }
+            //if(currentSubcaseLevel != subcasesStack.size()) {
+            //    s << Color::Yellow << "\nDEEPEST SUBCASE STACK REACHED (DIFFERENT FROM THE CURRENT ONE):\n" << Color::None;
+            //    for(size_t i = 0; i < subcasesStack.size(); ++i) {
+            //        if(subcasesStack[i].m_name[0] != '\0')
+            //            s << "  " << subcasesStack[i].m_name << "\n";
+            //    }
+            //}
 
             s << "\n";
 
-            hasLoggedCurrentTestStart = true;
+            hasLoggedCurrentTestStart = variation;
         }
 
         void printVersion() {
@@ -3185,19 +3226,30 @@ namespace {
         }
 
         void test_case_start(const TestCaseData& in) override {
-            hasLoggedCurrentTestStart = false;
-            tc                        = &in;
+            hasLoggedCurrentTestStart   = 0;
+            hasLoggedCurrentTestSubcase = 0;
+            tc                          = &in;
             subcasesStack.clear();
             currentSubcaseLevel = 0;
+            variation = 1;
         }
 
         void test_case_reenter(const TestCaseData&) override {
+            if (hasLoggedCurrentTestStart == variation)
+                logSubcasesStack();
+            hasLoggedCurrentTestSubcase = 0;
             subcasesStack.clear();
+            currentSubcaseLevel = 0;
+            variation++;
         }
 
         void test_case_end(const CurrentTestCaseStats& st) override {
             if(tc->m_no_output)
                 return;
+
+            const bool shouldLogEndOfSubcaseSequence = (hasLoggedCurrentTestStart == variation);
+            if (hasLoggedCurrentTestStart)
+                hasLoggedCurrentTestStart = variation;
 
             // log the preamble of the test case only if there is something
             // else to print - something other than that an assert has failed
@@ -3205,9 +3257,16 @@ namespace {
                (st.failure_flags && st.failure_flags != static_cast<int>(TestCaseFailureReason::AssertFailure)))
                 logTestStart();
 
-            if(opt.duration)
+            if (shouldLogEndOfSubcaseSequence)
+                logSubcasesStack();
+
+            if(opt.duration) {
                 s << Color::None << std::setprecision(6) << std::fixed << st.seconds
-                  << " s: " << tc->m_name << "\n";
+                  << " s: " << tc->m_name;
+                if (variation > 1)
+                    s << " (" << variation << " variations)";
+                s << "\n";
+            }
 
             if(st.failure_flags & TestCaseFailureReason::Timeout)
                 s << Color::Red << "Test case exceeded time limit of " << std::setprecision(6)
@@ -3260,12 +3319,12 @@ namespace {
         void subcase_start(const SubcaseSignature& subc) override {
             subcasesStack.push_back(subc);
             ++currentSubcaseLevel;
-            hasLoggedCurrentTestStart = false;
+            // hasLoggedCurrentTestStart = false;
         }
 
         void subcase_end() override {
             --currentSubcaseLevel;
-            hasLoggedCurrentTestStart = false;
+            // hasLoggedCurrentTestStart = false;
         }
 
         void log_assert(const AssertData& rb) override {
@@ -3275,6 +3334,7 @@ namespace {
             DOCTEST_LOCK_MUTEX(mutex)
 
             logTestStart();
+            logTestSubcaseStart();
 
             file_line_to_stream(rb.m_file, rb.m_line, " ");
             successOrFailColoredStringToStream(!rb.m_failed, rb.m_at);
@@ -3291,11 +3351,14 @@ namespace {
             DOCTEST_LOCK_MUTEX(mutex)
 
             logTestStart();
+            logTestSubcaseStart();
 
-            file_line_to_stream(mb.m_file, mb.m_line, " ");
-            s << getSuccessOrFailColor(false, mb.m_severity)
-              << getSuccessOrFailString(mb.m_severity & assertType::is_warn, mb.m_severity,
-                                        "MESSAGE") << ": ";
+            if (mb.m_severity) {
+                file_line_to_stream(mb.m_file, mb.m_line, " ");
+                s << getSuccessOrFailColor(false, mb.m_severity)
+                  << getSuccessOrFailString(mb.m_severity & assertType::is_warn, mb.m_severity,
+                                            "MESSAGE") << ": ";
+            }
             s << Color::None << mb.m_string << "\n";
             log_contexts();
         }
