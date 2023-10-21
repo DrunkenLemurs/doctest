@@ -1190,15 +1190,30 @@ DOCTEST_MSVC_SUPPRESS_WARNING_POP
 
     template <typename T>
     struct filldata<T*> {
+#ifdef DOCTEST_CONFIG_INCLUDE_TYPE_TRAITS
+            template <typename U>
+            using detect_void_type = std::conditional<std::is_volatile<U>, volatile void, void>;
+#else
+            template<typename>
+            struct detect_void_type {
+                using type = void;
+            };
+
+            template<typename U>
+            struct detect_void_type<volatile U> {
+                using type = volatile void;
+            }
+#endif
 DOCTEST_MSVC_SUPPRESS_WARNING_WITH_PUSH(4180)
         static void fill(std::ostream* stream, const T* in) {
+            using void_type = typename detect_void_type<T>::type;
 DOCTEST_MSVC_SUPPRESS_WARNING_POP
 DOCTEST_CLANG_SUPPRESS_WARNING_WITH_PUSH("-Wmicrosoft-cast")
-            filldata<const void*>::fill(stream,
+            filldata<const void_type*>::fill(stream,
 #if DOCTEST_GCC == 0 || DOCTEST_GCC >= DOCTEST_COMPILER(4, 9, 0)
-                reinterpret_cast<const void*>(in)
+                reinterpret_cast<const void_type*>(in)
 #else
-                *reinterpret_cast<const void* const*>(&in)
+                *reinterpret_cast<const void_type* const*>(&in)
 #endif
             );
 DOCTEST_CLANG_SUPPRESS_WARNING_POP
