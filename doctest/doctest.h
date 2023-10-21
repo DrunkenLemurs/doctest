@@ -1202,7 +1202,7 @@ DOCTEST_MSVC_SUPPRESS_WARNING_POP
             template<typename U>
             struct detect_void_type<volatile U> {
                 using type = volatile void;
-            }
+            };
 #endif
 DOCTEST_MSVC_SUPPRESS_WARNING_WITH_PUSH(4180)
         static void fill(std::ostream* stream, const T* in) {
