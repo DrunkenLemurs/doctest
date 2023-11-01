@@ -133,7 +133,8 @@ function(doctest_discover_tests TARGET)
     PROPERTY CROSSCOMPILING_EMULATOR
   )
   add_custom_command(
-    TARGET ${TARGET} POST_BUILD
+    MAIN_DEPENDENCY "${TARGET}"
+    TARGET "${TARGET}" POST_BUILD
     BYPRODUCTS "${ctest_tests_file}"
     COMMAND "${CMAKE_COMMAND}"
             -D "TEST_TARGET=${TARGET}"
